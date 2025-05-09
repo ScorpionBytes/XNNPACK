@@ -6,7 +6,7 @@
 #include "src/xnnpack/subgraph.h"
 
 #include <assert.h>
-#include <inttypes.h>  // fixdeps: keep
+#include <inttypes.h>  // IWYU pragma: keep
 #include <math.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -14,6 +14,7 @@
 #include <string.h>
 
 #include "include/xnnpack.h"
+#include "src/subgraph/subgraph-utils.h"
 #include "src/xnnpack/allocation-type.h"
 #include "src/xnnpack/allocator.h"
 #include "src/xnnpack/common.h"
@@ -344,7 +345,13 @@ void xnn_subgraph_analyze_consumers_and_producers(xnn_subgraph_t subgraph) {
       const uint32_t output_id = node->outputs[o];
       assert(output_id < subgraph->num_values);
 
-      assert(subgraph->values[output_id].producer == XNN_INVALID_NODE_ID);
+      // Input/output values can also be produced by an `fp16` conversions of
+      // `fp32` persistent values.
+      assert(subgraph->values[output_id].producer == XNN_INVALID_NODE_ID ||
+             (subgraph->values[output_id].datatype == xnn_datatype_fp16 &&
+              subgraph->values[output_id].fp32_id != XNN_INVALID_NODE_ID &&
+              subgraph->values[subgraph->values[output_id].fp32_id].producer ==
+                  XNN_INVALID_NODE_ID));
       subgraph->values[output_id].producer = n;
     }
   }
@@ -983,6 +990,9 @@ static bool all_values_fp32_or_pfp32(xnn_subgraph_t subgraph,
 bool xnn_subgraph_rewrite_for_fp16(xnn_subgraph_t subgraph) {
   xnn_log_info("Analyzing subgraph for FP16 compatibility");
 
+  // Count the number of consumers for each value.
+  xnn_subgraph_analyze_consumers_and_producers(subgraph);
+
   // Convert tensors and operators in the subgraph to FP16
   // 1. Check that all operators in the subgraph are supported in FP16.
   // 2. Indicate values that must be converted to FP16.
@@ -1056,7 +1066,9 @@ bool xnn_subgraph_rewrite_for_fp16(xnn_subgraph_t subgraph) {
     switch (node->type) {
       case xnn_node_type_deconvolution_2d:
       case xnn_node_type_depthwise_convolution_2d:
-        subgraph->values[node->inputs[0]].fp16_compatible = true;
+        if (subgraph->values[node->inputs[0]].datatype == xnn_datatype_fp32) {
+          subgraph->values[node->inputs[0]].fp16_compatible = true;
+        }
         subgraph->values[node->outputs[0]].fp16_compatible = true;
         break;
       case xnn_node_type_convolution_2d:
@@ -1294,7 +1306,7 @@ bool xnn_subgraph_rewrite_for_fp16(xnn_subgraph_t subgraph) {
         value->num_consumers = 0;
         value->first_consumer = XNN_INVALID_NODE_ID;
         xnn_log_debug("FP16 rewrite: created FP16 tensor #%" PRIu32
-                      " for FP32 tensor #%" PRIu32,
+                      " for external FP32 tensor #%" PRIu32,
                       subgraph->values[value->fp16_id].id, n);
       } else {
         switch (value->datatype) {
@@ -1315,6 +1327,9 @@ bool xnn_subgraph_rewrite_for_fp16(xnn_subgraph_t subgraph) {
       }
     }
   }
+
+  // Switch the nodes consuming/generated converted `fp32` inputs/outputs to
+  // their `fp16` values.
   for (uint32_t n = 0; n < subgraph->num_nodes; n++) {
     struct xnn_node* node = &subgraph->nodes[n];
     if (node->type == xnn_node_type_invalid) {
@@ -1373,7 +1388,7 @@ bool xnn_subgraph_rewrite_for_fp16(xnn_subgraph_t subgraph) {
       const struct xnn_value* value = &subgraph->values[node->outputs[o]];
       if (value->fp32_id != XNN_INVALID_VALUE_ID) {
         xnn_log_debug("Inserted FP16->FP32 Convert Node from tensor #%" PRIu32
-                      " to tensor #%" PRIu32,
+                      " to output tensor #%" PRIu32,
                       value->id, value->fp32_id);
         const uint32_t output_node_id = output_node->id;
         assert(output_node >= subgraph->nodes);
