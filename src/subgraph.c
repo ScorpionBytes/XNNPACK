@@ -142,21 +142,6 @@ enum xnn_status xnn_create_subgraph(uint32_t external_value_ids, uint32_t flags,
   subgraph->num_values = external_value_ids;
   subgraph->num_reserved_values = external_value_ids;
 
-#ifdef XNN_SLINKY_ENABLED
-  // If compiling with XNN_SLINKY_ENABLED defined, assume we always
-  // want Slinky enabled, regardless of the runtime flag
-  const bool use_slinky = true;
-#else
-  const bool use_slinky = flags & XNN_FLAG_SLINKY_ENABLED;
-#endif
-  // If we're using Slinky, don't inline packing functions as Slinky does that
-  // automatically.
-  if (use_slinky) {
-    xnn_log_info(
-        "disabling inlined LHS packing because `XNN_FLAG_SLINKY_ENABLED` is "
-        "set.");
-    flags |= XNN_FLAG_NO_INLINED_LHS_PACKING;
-  }
   subgraph->flags = flags;
 
   *subgraph_out = subgraph;
@@ -2247,7 +2232,8 @@ static bool convert_gemm_to_qduint8(
   return convert_to_qu8;
 }
 
-enum xnn_status xnn_subgraph_optimize_packed_lhs(xnn_subgraph_t subgraph) {
+enum xnn_status xnn_subgraph_optimize_packed_lhs(xnn_subgraph_t subgraph,
+                                                uint32_t optimization_flags) {
   // Count the number of changes made.
   size_t changes = 0;
 
@@ -2331,7 +2317,7 @@ enum xnn_status xnn_subgraph_optimize_packed_lhs(xnn_subgraph_t subgraph) {
     }
 
     if (assumed_datatype != xnn_datatype_invalid) {
-      if (subgraph->flags & XNN_FLAG_NO_INLINED_LHS_PACKING) {
+      if (optimization_flags & XNN_FLAG_NO_INLINED_LHS_PACKING) {
         if (assumed_datatype == xnn_datatype_qdint8) {
           // If the input is already `qdint8`, don't do anything different.
           continue;
@@ -2607,7 +2593,7 @@ enum xnn_status xnn_subgraph_optimize(xnn_subgraph_t subgraph,
   }
 #endif
 
-  enum xnn_status status = xnn_subgraph_optimize_packed_lhs(subgraph);
+  enum xnn_status status = xnn_subgraph_optimize_packed_lhs(subgraph, optimization_flags);
   if (status != xnn_status_success) {
     return status;
   }

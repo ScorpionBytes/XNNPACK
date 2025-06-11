@@ -525,6 +525,22 @@ enum xnn_status xnn_create_runtime_v4(
 
   xnn_subgraph_rewrite_ssa(subgraph);
 
+  #ifdef XNN_SLINKY_ENABLED
+  // If compiling with XNN_SLINKY_ENABLED defined, assume we always
+  // want Slinky enabled, regardless of the runtime flag
+  const bool use_slinky = true;
+#else
+  const bool use_slinky = flags & XNN_FLAG_SLINKY_ENABLED;
+#endif
+  // If we're using Slinky, don't inline packing functions as Slinky does that
+  // automatically.
+  if (use_slinky) {
+    xnn_log_info(
+        "disabling inlined LHS packing because `XNN_FLAG_SLINKY_ENABLED` is "
+        "set.");
+    flags |= XNN_FLAG_NO_INLINED_LHS_PACKING;
+  }
+
   const uint32_t optimization_flags =
       XNN_FLAG_HINT_SPARSE_INFERENCE | XNN_FLAG_HINT_FP16_INFERENCE |
       XNN_FLAG_FORCE_FP16_INFERENCE | XNN_FLAG_NO_OPERATOR_FUSION |
